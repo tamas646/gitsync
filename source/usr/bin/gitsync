@@ -1,0 +1,735 @@
+#!/bin/bash
+set -e
+
+INI_FILE="/etc/gitsync/gitsync.ini"
+BACKUP_DIR="/var/backups/gitsync/"
+
+HELP=false
+ANSWER_YES=false
+PARAM_TIME=""
+PARAM_NAME=""
+PARAM_LINK=""
+METHOD=""
+
+echoerr() { echo "$@" 1>&2; }
+
+show_help()
+{
+	case $METHOD in
+		clone)
+			echo "Usage: gitsync clone <repo>"
+			echo ""
+			echo "Options:"
+			echo "    -y|--yes   Answer yes to questions took by the script"
+			echo ""
+			;;
+		stop)
+			echo "Usage: gitsync stop <repo>"
+			echo ""
+			;;
+		fetch)
+			echo "Usage: gitsync fetch <repo>"
+			echo ""
+			;;
+		pull)
+			echo "Usage: gitsync pull <repo>"
+			echo ""
+			;;
+		update)
+			echo "Usage: gitsync update <repo>"
+			echo ""
+			echo "Options:"
+			echo "    -y|--yes   Answer yes to questions took by the script"
+			echo ""
+			;;
+		start)
+			echo "Usage: gitsync start <repo>"
+			echo ""
+			;;
+		status)
+			echo "Usage: gitsync status <repo>"
+			echo ""
+			;;
+		backup)
+			echo "Usage: gitsync backup <repo> <create|restore|delete>"
+			echo ""
+			echo "Options:"
+			echo "    -y|--yes   Answer yes to questions took by the script"
+			echo "    -n|--name  Specifies the name of the backup"
+			echo "    -l|--link  The directory which will be used as a link source"
+			echo ""
+			;;
+		nightwork)
+			echo "Usage: gitsync nightwork <repo>"
+			echo ""
+			echo "Options:"
+			echo "    -y|--yes    Answer yes to questions took by the script"
+			echo ""
+			;;
+		cd)
+			echo "Usage: gitsync cd <repo>"
+			echo ""
+			;;
+		mysql)
+			echo "Usage: gitsync mysql <repo>"
+			echo ""
+			;;
+		time)
+			echo "Usage: gitsync time '<command>'"
+			echo ""
+			echo "Options:"
+			echo "    -t|--time   Specifies the timeout for the command in seconds. If the runtime"
+			echo "                 is greater than this time, an email alert will be sent."
+			;;
+		auto)
+			echo "Usage: gitsync auto <repo>"
+			echo ""
+			echo "Options:"
+			echo "    -y|--yes   Answer yes to questions took by the script"
+			echo ""
+			;;
+		delsessions)
+			echo "Usage: gitsync delsessions <repo>"
+			echo ""
+			;;
+		*)
+			echo "Usage: gitsync <command> [<options>] <repo|args>"
+			echo ""
+			echo "For every command to run you need to specify the repos in the config file (/etc/gitsync/gitsync.ini)"
+			echo ""
+			echo "Commands:"
+			echo "   clone         Clone git repository to the specified directory"
+			echo "   stop          Stop the website by disabling apache2 virtualhost"
+			echo "   fetch         Fetch git repository"
+			echo "   pull          Pull git repository"
+			echo "   update        Update repository by running update script (if enabled),"
+			echo "                  set file privileges according to .gitignore files (if enabled),"
+			echo "                  and purge cloudflare cache (if enabled)"
+			echo "   start         Start the website by enabling apache2 virtualhost"
+			echo "   status        Check the website status"
+			echo "   backup        Create repository backup"
+			echo "   nightwork     Execute nightwork script (if enabled)"
+			echo "   cd            Start new shell environment in the repository folder"
+			echo "   mysql         Open MySQL command line client using the host, user"
+			echo "                   and password specified in the php config file"
+			echo "   time          Measure runtime and send email on script failure"
+			echo "                   (recommended for automation)"
+			echo "   auto          Stop, fetch, pull, update and start command in one step"
+			echo "   delsessions   Delete stored session files"
+			echo ""
+			echo "Global options:"
+			echo "    -y|--yes     Automatically answer yes to all question took by the script"
+			echo "    -h|--help    Show global or command specific help"
+			echo ""
+			echo "For command specific options, see 'gitsync <command> -h' or 'gitsync <command> --help'"
+			;;
+	esac
+	exit 2
+}
+
+while [[ $# -gt 0 ]]
+do
+	key="$1"
+	case $key in
+		-y|--yes)
+			ANSWER_YES=true
+			shift
+			;;
+		-t|--time)
+			PARAM_TIME="$2"
+			shift
+			shift
+			;;
+		-n|--name)
+			PARAM_NAME="$2"
+			shift
+			shift
+			;;
+		-l|--link)
+			PARAM_LINK="$2"
+			shift
+			shift
+			;;
+		-h|--help)
+			HELP=true
+			shift
+			;;
+		*)
+			PARAMS+=("`echo $1 |tr ' ' ';'`")
+			shift
+			;;
+	esac
+done
+
+if [[ "${#PARAMS[@]}" == 0 ]]
+then
+	echoerr "Command not specified"
+	echoerr ""
+	show_help
+fi
+
+METHOD="${PARAMS[0]}"
+PARAMS=(${PARAMS[@]:1})
+
+if [[ $HELP == true ]]
+then
+	show_help
+fi
+
+load_ini_data()
+{
+	if [[ ! -f "$INI_FILE" ]]
+	then
+		echoerr "Ini file not found"
+		exit 5
+	fi
+	section=0
+	while read -r line
+	do
+		line=$(echo -e "${line}" |sed '/^[[:blank:]]*#/g;s/#.*//' |sed '/^[[:blank:]]*;/g;s/;.*//' |sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+		if [[ "$line" == "" ]]
+		then
+			continue
+		elif [[ "$line" == "[$1]" ]]
+		then
+			section=2
+		elif [[ "$line" == "["*"]" ]]
+		then
+			if [[ $section == 2 ]]
+			then
+				break
+			fi
+			section=1
+		elif [[ $section != 1 ]]
+		then
+			if [[ "$line" == *?"="* ]]
+			then
+				key="$(echo "$line" |sed 's/=.*//' |sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |tr '-' '_')"
+				value="$(echo "$line" |sed 's/.*=//' |sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+				eval "ini_${key}='${value}'"
+			else
+				echoerr "Corrupt ini file"
+				exit 5
+			fi
+		fi
+	done < "$INI_FILE"
+
+	if [[ "$1" != "" && $section != 2 ]]
+	then
+		echoerr "Section '$1' not found"
+		exit 5
+	fi
+}
+
+case $METHOD in
+	clone)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ ! -d "$ini_path" ]]
+		then
+			if [[ $ANSWER_YES != true ]]
+			then
+				echo -n "The specified git directory doesn't exists. Do you want to create it? [Y/n] " ; read answer
+			fi
+			if [[ $ANSWER_YES != true ]] && [[ "$answer" != "y" && "$answer" != "Y" && "$answer" != "" ]]
+			then
+				echo "Aborting..."
+				exit 55
+			else
+				mkdir -p "$ini_path"
+			fi
+		fi
+
+		git clone "$ini_gitrepo" "$ini_path"
+
+		;;
+	stop)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		ini_vhost="${PARAMS[0]}"
+		load_ini_data "${PARAMS[0]}"
+
+		a2dissite "$ini_vhost"
+		apachectl graceful
+
+		;;
+	fetch)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		cd "$ini_path"
+		git fetch
+
+		;;
+	pull)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		cd "$ini_path"
+		git pull
+
+		;;
+	update)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ "$ini_update_enabled" == "yes" ]]
+		then
+			echo "Running update..."
+			if [[ ! -f "$ini_path/$ini_update_script" ]]
+			then
+				echoerr "Error: Update script not found at '$ini_path/$ini_update_script'"
+				exit 1
+			fi
+			if [[ $ANSWER_YES == true ]]
+			then
+				"$ini_path/$ini_update_script" -y
+			else
+				"$ini_path/$ini_update_script"
+			fi
+		else
+			echo "Update script is disabled for '${PARAMS[0]}'"
+		fi
+
+		if [[ "$ini_gitignore_enabled" == "yes" ]]
+		then
+			echo "Setting privileges..."
+			if [[ "$ini_gitignore_owner" == "" ]]
+			then
+				echoerr "Error: gitignore owner is not set"
+				exit 1
+			fi
+			if [[ "$ini_gitignore_dirmode" == "" ]]
+			then
+				echoerr "Error: gitignore directory mode is not set"
+				exit 1
+			fi
+			if [[ "$ini_gitignore_filemode" == "" ]]
+			then
+				echoerr "Error: gitignore file mode is not set"
+				exit 1
+			fi
+			chown -R root:root "$ini_path"
+			if [[ -f "$ini_path/$ini_gitignore_file" ]]
+			then
+				dirname="$(dirname "$ini_path/$ini_gitignore_file")"
+				while read -r line
+				do
+					if [[ "$line" == "" ]]
+					then
+						continue
+					fi
+					i=0
+					while [[ $i < ${#ini_gitignore_exclude[@]} ]]
+					do
+						if [[ "$line" == "${ini_gitignore_exclude[$i]}" ]]
+						then
+							continue 2
+						fi
+						i=$((i+1))
+					done
+					if [[ -d "$dirname/$line" ]]
+					then
+						chown -R $ini_gitignore_owner "$dirname/$line"
+						find "$dirname/$line" -type f -exec chmod $ini_gitignore_filemode -- {} +
+						find "$dirname/$line" -type d -exec chmod $ini_gitignore_dirmode -- {} +
+					elif [[ -f "$dirname/$line" ]]
+					then
+						chown $ini_gitignore_owner "$dirname/$line"
+						chmod $ini_gitignore_filemode "$dirname/$line"
+					fi
+				done < "$ini_path/$ini_gitignore_file"
+			else
+				echoerr "Error: gitignore file not found at '$ini_path/$ini_gitignore_file'"
+				exit 1
+			fi
+		else
+			echo "Gitignore is disabled for '${PARAMS[0]}'"
+		fi
+
+		if [[ "$ini_cf_enabled" == "yes" ]]
+		then
+			echo -n "Purging cloudflare cache..."
+			result=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$ini_cf_zoneid/purge_cache" -H "X-Auth-Email: $ini_cf_email" -H "X-Auth-Key: $ini_cf_api_key" -H "Content-Type: application/json" --data '{"purge_everything":true}')
+			if [[ "$result" == *"\"success\":true"* || "$result" == *"\"success\": true"* ]]
+			then
+				echo " OK"
+			else
+				echo " ERROR"
+				echoerr "Cloudflare error:"
+				echoerr "$result"
+				exit 1
+			fi
+		else
+			echo "Cloudflare is disabled for '${PARAMS[0]}'"
+		fi
+
+		;;
+	start)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		ini_vhost="${PARAMS[0]}"
+		load_ini_data "${PARAMS[0]}"
+
+		a2ensite "$ini_vhost"
+		apachectl graceful
+
+		;;
+	status)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		ini_vhost="${PARAMS[0]}"
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ -f "/etc/apache2/sites-enabled/${ini_vhost}.conf" ]]
+		then
+			echo "Site '$ini_vhost' is enabled"
+		else
+			echo "Site '$ini_vhost' is disabled"
+		fi
+
+		;;
+	backup)
+		if [[ ${#PARAMS[@]} != 2 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ "$ini_backup_enabled" != "yes" ]]
+		then
+			echoerr "Backup is disabled for '${PARAMS[0]}'"
+			exit 6
+		fi
+
+		if [[ ! -d "$BACKUP_DIR/${PARAMS[0]}" ]]
+		then
+			mkdir -p "$BACKUP_DIR/${PARAMS[0]}"
+		fi
+
+		case ${PARAMS[1]} in
+			create)
+				if [[ "$PARAM_LINK" == "" && ! -z "$(ls -A "$BACKUP_DIR/${PARAMS[0]}")" ]]
+				then
+					PARAM_LINK="$(ls -td "$BACKUP_DIR/${PARAMS[0]}/"*/ |head -1)"
+				fi
+
+				if [[ "$PARAM_NAME" == "" ]]
+				then
+					PARAM_NAME="$(date '+%Y-%m-%d %H:%M:%S')"
+				fi
+
+				if [[ "$PARAM_LINK" != "" ]] && [[ ! -d "$PARAM_LINK/files/" || ! -d "$PARAM_LINK/databases/"  ]]
+				then
+					echoerr "Error: Link directory not found or not containing a valid backup"
+					exit 1
+				fi
+
+				if [[ -d "$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/" ]]
+				then
+					echoerr "Error: Backup name '$PARAM_NAME' is already in use"
+					exit 1
+				fi
+
+				if [[ "$PARAM_LINK" == "" ]]
+				then
+					mkdir -p "$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/files/"
+					mkdir -p "$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/databases/"
+				else
+					cp -al "$PARAM_LINK/" "$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/"
+				fi
+
+				echo -n "Backing up files..."
+				includes=""
+				while IFS='' read -r -d '' filename
+				do
+					replace="$(realpath "$ini_path" |sed 's/\//\\\//g')"
+					dirname="$(realpath "`dirname "$filename"`" |sed "s/${replace}//")"
+					while read -r line
+					do
+						if [[ "$line" != "" ]]
+						then
+							if [[ ! -d "$ini_path/$dirname/$line" ]]
+							then
+								includes="$includes --include=\"$dirname/$line\""
+							elif [[ "${line:${#line}-1:1}" != "/" ]]
+							then
+								includes="$includes --include=\"$dirname/$line/***\""
+							else
+								includes="$includes --include=\"$dirname/$line***\""
+							fi
+						fi
+					done < "$filename"
+				done < <(find "$ini_path/" -type f -name ".gitignore" -print0)
+				eval "rsync -a --delete --delete-excluded --prune-empty-dirs --include=\"**/\"$includes --exclude=\"*\" \"$ini_path/\" \"$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/files/\""
+				echo ""
+
+				MYSQLUSER="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_user;"`"
+				MYSQLPASSWORD="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_password;"`"
+				MYSQLHOST="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_host;"`"
+
+				databases="$(php -r "\$s='';\$q=(new mysqli('$MYSQLHOST','$MYSQLUSER','$MYSQLPASSWORD'))->query('SHOW DATABASES');while(\$d=\$q->fetch_assoc())if(preg_match('/$ini_mysql_backup_dbptn/',\$d['Database']))\$s.=\$d['Database'].' ';echo trim(\$s);")"
+				if [[ "$databases" != "" ]]
+				then
+					if [[ -d "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/" ]]
+					then
+						rm -R "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/"
+					fi
+					mkdir -p "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/"
+					databases=(`echo "$databases"`)
+					j=0
+					while [[ $j < ${#databases[@]} ]]
+					do
+						echo -n "Backing up \`${databases[$j]}\`..."
+						php -r "define(\"DB_USER\",'${MYSQLUSER}');
+							define(\"DB_PASSWORD\",'${MYSQLPASSWORD}');
+							define(\"DB_NAME\",'${databases[$j]}');
+							define(\"DB_HOST\",'${MYSQLHOST}');
+							define(\"BACKUP_DIR\",'/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/');
+							define(\"TABLES\",'*');
+							define(\"CHARSET\",'utf8mb4');
+							define(\"GZIP_BACKUP_FILE\",false);
+							define(\"DISABLE_FOREIGN_KEY_CHECKS\",true);
+							define(\"BATCH_SIZE\",1000);
+							class Backup_Database{var \$host;var \$username;var \$passwd;var \$dbName;var \$charset;var \$conn;var \$backupDir;var \$backupFile;var \$gzipBackupFile;var \$output;var \$disableForeignKeyChecks;var \$batchSize;public function __construct(\$host,\$username,\$passwd,\$dbName,\$charset='utf8'){\$this->host=\$host;\$this->username=\$username;\$this->passwd=\$passwd;\$this->dbName=\$dbName;\$this->charset=\$charset;\$this->conn=\$this->initializeDatabase();\$this->backupDir=BACKUP_DIR?BACKUP_DIR:'.';\$this->backupFile=\$this->dbName.'.sql';\$this->gzipBackupFile=defined('GZIP_BACKUP_FILE')?GZIP_BACKUP_FILE:true;\$this->disableForeignKeyChecks=defined('DISABLE_FOREIGN_KEY_CHECKS')?DISABLE_FOREIGN_KEY_CHECKS:true;\$this->batchSize=defined('BATCH_SIZE')?BATCH_SIZE:1000;\$this->output='';}protected function initializeDatabase(){try{\$conn=mysqli_connect(\$this->host,\$this->username,\$this->passwd,\$this->dbName);if(mysqli_connect_errno()){throw new Exception('ERROR connecting database: '.mysqli_connect_error());die(55);}}catch(Exception \$e){print_r(\$e->getMessage());die(55);}return \$conn;}public function backupTables(\$tables='*'){try{if(\$tables=='*'){\$tables=array();\$result=mysqli_query(\$this->conn,'SHOW TABLES');while(\$row=mysqli_fetch_row(\$result)){\$tables[]=\$row[0];}}else{\$tables=is_array(\$tables)?\$tables:explode(',',str_replace(' ','',\$tables));}\$sql='CREATE DATABASE IF NOT EXISTS \`'.\$this->dbName.\"\`;\\n\\n\";\$sql.='USE \`'.\$this->dbName.\"\`;\\n\\n\";if(\$this->disableForeignKeyChecks===true){\$sql.=\"SET foreign_key_checks = 0;\\n\\n\";}foreach(\$tables as \$table){\$this->obfPrint(\"Backing up \`\".\$table.\"\` table...\".str_repeat('.',50-strlen(\$table)),0,0);\$sql.='DROP TABLE IF EXISTS \`'.\$table.'\`;';\$row=mysqli_fetch_row(mysqli_query(\$this->conn,'SHOW CREATE TABLE \`'.\$table.'\`'));\$sql.=\"\\n\\n\".\$row[1].\";\\n\\n\";\$row=mysqli_fetch_row(mysqli_query(\$this->conn,'SELECT COUNT(*) FROM \`'.\$table.'\`'));\$numRows=\$row[0];\$numBatches=intval(\$numRows/\$this->batchSize)+1;for(\$b=1;\$b<=\$numBatches;\$b++){\$query='SELECT * FROM \`'.\$table.'\` LIMIT '.(\$b*\$this->batchSize-\$this->batchSize).','.\$this->batchSize;\$result=mysqli_query(\$this->conn,\$query);\$realBatchSize=mysqli_num_rows(\$result);\$numFields=mysqli_num_fields(\$result);if(\$realBatchSize!==0){\$sql.='INSERT INTO \`'.\$table.'\` VALUES ';for(\$i=0;\$i<\$numFields;\$i++){\$rowCount=1;while(\$row=mysqli_fetch_row(\$result)){\$sql.='(';for(\$j=0;\$j<\$numFields;\$j++){if(isset(\$row[\$j])){\$row[\$j]=addslashes(\$row[\$j]);\$row[\$j]=str_replace(\"\\n\",\"\\\\n\",\$row[\$j]);\$row[\$j]=str_replace(\"\\r\",\"\\\\r\",\$row[\$j]);\$row[\$j]=str_replace(\"\\f\",\"\\\\f\",\$row[\$j]);\$row[\$j]=str_replace(\"\\t\",\"\\\\t\",\$row[\$j]);\$row[\$j]=str_replace(\"\\v\",\"\\\\v\",\$row[\$j]);\$row[\$j]=str_replace(\"\\a\",\"\\\\a\",\$row[\$j]);\$row[\$j]=str_replace(\"\\b\",\"\\\\b\",\$row[\$j]);if(\$row[\$j]=='true'or \$row[\$j]=='false'or preg_match('/^-?[0-9]+\$/',\$row[\$j])or \$row[\$j]=='NULL'or \$row[\$j]=='null'){\$sql.=\$row[\$j];}else{\$sql.='\"'.\$row[\$j].'\"';}}else{\$sql.='NULL';}if(\$j<(\$numFields-1)){\$sql.=',';}}if(\$rowCount==\$realBatchSize){\$rowCount=0;\$sql.=\");\\n\";}else{\$sql.=\"),\\n\";}\$rowCount++;}}\$this->saveFile(\$sql);\$sql='';}}\$sql.=\"\\n\\n\";\$this->obfPrint('OK');}if(\$this->disableForeignKeyChecks===true){\$sql.=\"SET foreign_key_checks = 1;\\n\";}\$this->saveFile(\$sql);if(\$this->gzipBackupFile){\$this->gzipBackupFile();}else{\$this->obfPrint('Backup file succesfully saved to '.\$this->backupDir.'/'.\$this->backupFile,1,1);}}catch(Exception \$e){print_r(\$e->getMessage());return false;}return true;}protected function saveFile(&\$sql){if(!\$sql)return false;try{if(!file_exists(\$this->backupDir)){mkdir(\$this->backupDir,0777,true);}file_put_contents(\$this->backupDir.'/'.\$this->backupFile,\$sql,FILE_APPEND|LOCK_EX);}catch(Exception \$e){print_r(\$e->getMessage());return false;}return true;}protected function gzipBackupFile(\$level=9){if(!\$this->gzipBackupFile){return true;}\$source=\$this->backupDir.'/'.\$this->backupFile;\$dest=\$source.'.gz';\$this->obfPrint('Gzipping backup file to '.\$dest.'... ',1,0);\$mode='wb'.\$level;if(\$fpOut=gzopen(\$dest,\$mode)){if(\$fpIn=fopen(\$source,'rb')){while(!feof(\$fpIn)){gzwrite(\$fpOut,fread(\$fpIn,1024*256));}fclose(\$fpIn);}else{return false;}gzclose(\$fpOut);if(!unlink(\$source)){return false;}}else{return false;}\$this->obfPrint('OK');return \$dest;}public function obfPrint(\$msg='',\$lineBreaksBefore=0,\$lineBreaksAfter=1){if(!\$msg){return false;}if(\$msg!='OK'and \$msg!='KO'){\$msg=date(\"Y-m-d H:i:s\").' - '.\$msg;}\$output='';if(php_sapi_name()!=\"cli\"){\$lineBreak=\"<br />\";}else{\$lineBreak=\"\\n\";}if(\$lineBreaksBefore>0){for(\$i=1;\$i<=\$lineBreaksBefore;\$i++){\$output.=\$lineBreak;}}\$output.=\$msg;if(\$lineBreaksAfter>0){for(\$i=1;\$i<=\$lineBreaksAfter;\$i++){\$output.=\$lineBreak;}}\$this->output.=str_replace('<br />','\\n',\$output);echo \$output;if(php_sapi_name()!=\"cli\"){if(ob_get_level()>0){ob_flush();}}\$this->output.=\" \";flush();}public function getOutput(){return \$this->output;}}error_reporting(E_ALL);set_time_limit(900);if(php_sapi_name()!=\"cli\"){echo '<div style=\"font-family: monospace;\">';}\$backupDatabase=new Backup_Database(DB_HOST,DB_USER,DB_PASSWORD,DB_NAME,CHARSET);\$result=\$backupDatabase->backupTables(TABLES,BACKUP_DIR)?'OK':'KO';\$backupDatabase->obfPrint('Backup result: '.\$result,1);if(\$result=='KO')exit(55);\$output=\$backupDatabase->getOutput();if(php_sapi_name()!=\"cli\"){echo '</div>';}" > /dev/null
+						j=$((j+1))
+						echo ""
+					done
+					rsync -a --delete "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/" "$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/databases/"
+					rm -R "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/"
+					echo ""
+				fi
+
+				;;
+			restore)
+				echo "Under development..."
+
+				;;
+			delete)
+				echo "Under development..."
+
+				;;
+			*)
+				echoerr "Unknown subcommand '${PARAMS[1]}'"
+				echoerr ""
+				show_help
+				;;
+		esac
+
+		;;
+	nightwork)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ "$ini_nightwork_enabled" != "yes" ]]
+		then
+			echoerr "Nightwork is disabled for '${PARAMS[0]}'"
+			exit 6
+		fi
+
+		if [[ "$ini_nightwork_script" == "" ]]
+		then
+			echoerr "Error: nightwork script is not set"
+			exit 1
+		fi
+
+		if [[ $ANSWER_YES == true ]]
+		then
+			"$ini_path/$ini_nightwork_script" -y
+		else
+			"$ini_path/$ini_nightwork_script"
+		fi
+
+		;;
+	cd)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		echo "Starting new shell..."
+		cd "$ini_path"
+		/bin/bash
+
+		;;
+	mysql)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ ! -f "$ini_path/$ini_mysql_configfile" ]]
+		then
+			echoerr "Error: config file not found at '$ini_path/$ini_mysql_configfile'"
+			exit 1
+		fi
+
+		MYSQLUSER="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_user;"`"
+		MYSQLPASSWORD="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_password;"`"
+		MYSQLHOST="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_host;"`"
+
+		mysql -u "$MYSQLUSER" --password="$MYSQLPASSWORD" -h "$MYSQLHOST"
+
+		;;
+	time)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data
+
+		start=$(date +%s)
+		set +e
+		output=$(eval "gitsync `echo "${PARAMS[0]}" |tr ';' ' '`" 2>&1)
+		exitcode="$?"
+		set -e
+		end=$(date +%s)
+
+		if [[ "$exitcode" != "0" ]]
+		then
+			mail -s "Serverside: GT runtime error" "$ini_alert_email" << EOF
+Gitsync Time runtime error!
+
+The 'gitsync time' command has run into an error on machine `/bin/hostname`.
+Command: ${PARAMS[0]}
+Exitcode: $exitcode
+Running time: `echo $((end-start))` sec
+Date: `date '+%Y-%m-%d %H:%M:%S'`
+
+$output
+EOF
+			exit 1
+		fi
+
+		if [[ "$PARAM_TIME" != "" && $((end-start)) -gt $PARAM_TIME ]]
+		then
+			mail -s "Serverside: GT timeout" "$ini_alert_email" << EOF
+Gitsync Time timeout!
+
+The 'gitsync time' command has detected a timeout on machine `/bin/hostname`.
+Command: ${PARAMS[0]}
+Running time: `echo $((end-start))` sec (allowed: $PARAM_TIME sec)
+Date: `date '+%Y-%m-%d %H:%M:%S'`
+EOF
+		fi
+
+		;;
+	auto)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		plus_param=""
+		if [[ $ANSWER_YES == true ]]
+		then
+			plus_param="-y "
+		fi
+
+		gitsync stop $plus_param"${PARAMS[0]}"
+
+		gitsync fetch $plus_param"${PARAMS[0]}"
+
+		gitsync pull $plus_param"${PARAMS[0]}"
+
+		gitsync update $plus_param"${PARAMS[0]}"
+
+		gitsync start $plus_param"${PARAMS[0]}"
+
+		;;
+	delsessions)
+		if [[ ${#PARAMS[@]} != 1 ]]
+		then
+			echoerr "Incorrect number of parameters"
+			echoerr ""
+			show_help
+		fi
+
+		load_ini_data "${PARAMS[0]}"
+
+		if [[ "$ini_sessiondir" == "" ]]
+		then
+			echoerr "Error: session directory is not set"
+			exit 1
+		fi
+
+		if [[ ! -d "$ini_sessiondir" ]]
+		then
+			echoerr "Error: session directory not found"
+			exit 1
+		fi
+
+		if [[ ! -z "$(ls -A "$ini_sessiondir")" ]]
+		then
+			rm "$ini_sessiondir"/*
+		fi
+
+		;;
+	*)
+		echoerr "Unknown command '$METHOD'"
+		echoerr ""
+		show_help
+		;;
+esac
