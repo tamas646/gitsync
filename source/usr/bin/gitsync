@@ -454,7 +454,7 @@ case $METHOD in
 			create)
 				if [[ "$PARAM_LINK" == "" && ! -z "$(ls -A "$BACKUP_DIR/${PARAMS[0]}")" ]]
 				then
-					PARAM_LINK="$(ls -td "$BACKUP_DIR/${PARAMS[0]}/"*/ |head -1)"
+					PARAM_LINK="$(ls -tdr "$BACKUP_DIR/${PARAMS[0]}/"*/ |head -1)"
 				fi
 
 				if [[ "$PARAM_NAME" == "" ]]
