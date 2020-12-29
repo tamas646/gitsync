@@ -492,6 +492,10 @@ case $METHOD in
 					do
 						if [[ "$line" != "" ]]
 						then
+							if [[ "${line:0:1}" == "/" ]]
+							then
+								line="${line:1:$(expr ${#line} - 1)}"
+							fi
 							if [[ ! -d "$ini_path/$dirname/$line" ]]
 							then
 								includes="$includes --include=\"$dirname/$line\""
@@ -545,10 +549,6 @@ case $METHOD in
 
 				;;
 			restore)
-				echo "Under development..."
-
-				;;
-			delete)
 				echo "Under development..."
 
 				;;
