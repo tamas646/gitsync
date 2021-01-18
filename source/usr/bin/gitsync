@@ -510,7 +510,7 @@ case $METHOD in
 					done < "$filename"
 				done < <(find "$ini_path/" -type f -name ".gitignore" -print0)
 				eval "rsync -a --delete --delete-excluded --prune-empty-dirs --include=\"**/\"$includes --exclude=\"*\" \"$ini_path/\" \"$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/files/\""
-				touch "$BACKUP_DIR/${PARAMS[0]}/"
+				touch "$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME"
 				echo ""
 
 				MYSQLUSER="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_user;"`"

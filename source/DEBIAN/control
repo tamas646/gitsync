@@ -1,5 +1,5 @@
 Package: gitsync
-Version: 2.2.4
+Version: 2.2.5
 Architecture: all
 Depends: bash,coreutils,hostname,sed,curl,mailutils,git,rsync
 Maintainer: Pesti Tamás <ptamas2002@gmail.com>
