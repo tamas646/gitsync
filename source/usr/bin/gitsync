@@ -454,7 +454,7 @@ case $METHOD in
 			create)
 				if [[ "$PARAM_LINK" == "" && ! -z "$(ls -A "$BACKUP_DIR/${PARAMS[0]}")" ]]
 				then
-					PARAM_LINK="$(ls -tdr "$BACKUP_DIR/${PARAMS[0]}/"*/ |head -1)"
+					PARAM_LINK="$(ls -td "$BACKUP_DIR/${PARAMS[0]}/"*/ |head -1)"
 				fi
 
 				if [[ "$PARAM_NAME" == "" ]]
@@ -490,6 +490,7 @@ case $METHOD in
 					dirname="$(realpath "`dirname "$filename"`" |sed "s/${replace}//")"
 					while read -r line
 					do
+						line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 						if [[ "$line" != "" ]]
 						then
 							if [[ "${line:0:1}" == "/" ]]
@@ -509,6 +510,7 @@ case $METHOD in
 					done < "$filename"
 				done < <(find "$ini_path/" -type f -name ".gitignore" -print0)
 				eval "rsync -a --delete --delete-excluded --prune-empty-dirs --include=\"**/\"$includes --exclude=\"*\" \"$ini_path/\" \"$BACKUP_DIR/${PARAMS[0]}/$PARAM_NAME/files/\""
+				touch "$BACKUP_DIR/${PARAMS[0]}/"
 				echo ""
 
 				MYSQLUSER="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_user;"`"
