@@ -626,7 +626,7 @@ case $METHOD in
 						db_temp=`basename "${databases[$j]}"`
 						echo -n "Restoring \`${db_temp:0:${#db_temp}-4}\`..."
 						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" --password="$MYSQLPASSWORD" -e "CREATE DATABASE \`${db_temp:0:${#db_temp}-4}\`;"
-						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" --password="$MYSQLPASSWORD" < "$BACKUP_DIR2/databases/$db_temp"
+						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" --password="$MYSQLPASSWORD" "${db_temp:0:${#db_temp}-4}" < "$BACKUP_DIR2/databases/$db_temp"
 						echo ""
 						j=$((j+1))
 					done
