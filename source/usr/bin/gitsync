@@ -9,6 +9,7 @@ ANSWER_YES=false
 PARAM_TIME=""
 PARAM_NAME=""
 PARAM_LINK=""
+PARAM_DIR=false
 METHOD=""
 
 echoerr() { echo "$@" 1>&2; }
@@ -54,9 +55,10 @@ show_help()
 			echo "Usage: gitsync backup <repo> <create|restore>"
 			echo ""
 			echo "Options:"
-			echo "    -y|--yes   Answer yes to questions took by the script"
-			echo "    -n|--name  Specifies the name of the backup"
-			echo "    -l|--link  The directory which will be used as a link source"
+			echo "    -y|--yes        Answer yes to questions took by the script"
+			echo "    -n|--name       Specifies the name of the backup"
+			echo "    -l|--link       The directory which will be used as a link source"
+			echo "    -d|--directory  Use directory as backup location"
 			echo ""
 			;;
 		nightwork)
@@ -148,6 +150,10 @@ do
 		-l|--link)
 			PARAM_LINK="$2"
 			shift
+			shift
+			;;
+		-d|--directory)
+			PARAM_DIR=true
 			shift
 			;;
 		-h|--help)
@@ -430,7 +436,7 @@ case $METHOD in
 
 		;;
 	backup)
-		if [[ ${#PARAMS[@]} != 2 ]]
+		if [[ ${#PARAMS[@]} < 2 ]]
 		then
 			echoerr "Incorrect number of parameters"
 			echoerr ""
@@ -452,6 +458,13 @@ case $METHOD in
 
 		case ${PARAMS[1]} in
 			create)
+				if [[ ${#PARAMS[@]} != 2 ]]
+				then
+					echoerr "Incorrect number of parameters"
+					echoerr ""
+					show_help
+				fi
+
 				if [[ "$PARAM_LINK" == "" && ! -z "$(ls -A "$BACKUP_DIR/${PARAMS[0]}")" ]]
 				then
 					PARAM_LINK="$(ls -td "$BACKUP_DIR/${PARAMS[0]}/"*/ |head -1)"
@@ -530,18 +543,7 @@ case $METHOD in
 					while [[ $j < ${#databases[@]} ]]
 					do
 						echo -n "Backing up \`${databases[$j]}\`..."
-						php -r "define(\"DB_USER\",'${MYSQLUSER}');
-							define(\"DB_PASSWORD\",'${MYSQLPASSWORD}');
-							define(\"DB_NAME\",'${databases[$j]}');
-							define(\"DB_HOST\",'${MYSQLHOST}');
-							define(\"BACKUP_DIR\",'/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/');
-							define(\"TABLES\",'*');
-							define(\"BACKUP_TRIGGERS\",true);
-							define(\"CHARSET\",'utf8mb4');
-							define(\"GZIP_BACKUP_FILE\",false);
-							define(\"DISABLE_FOREIGN_KEY_CHECKS\",true);
-							define(\"BATCH_SIZE\",1000);
-							class Backup_Database{var \$host;var \$username;var \$passwd;var \$dbName;var \$charset;var \$conn;var \$backupDir;var \$backupFile;var \$gzipBackupFile;var \$output;var \$disableForeignKeyChecks;var \$batchSize;public function __construct(\$host,\$username,\$passwd,\$dbName,\$charset='utf8'){\$this->host=\$host;\$this->username=\$username;\$this->passwd=\$passwd;\$this->dbName=\$dbName;\$this->charset=\$charset;\$this->conn=\$this->initializeDatabase();\$this->backupDir=BACKUP_DIR?BACKUP_DIR:'.';\$this->backupFile=\$this->dbName.'.sql';\$this->gzipBackupFile=defined('GZIP_BACKUP_FILE')?GZIP_BACKUP_FILE:true;\$this->disableForeignKeyChecks=defined('DISABLE_FOREIGN_KEY_CHECKS')?DISABLE_FOREIGN_KEY_CHECKS:true;\$this->batchSize=defined('BATCH_SIZE')?BATCH_SIZE:1000;\$this->output='';}protected function initializeDatabase(){try{\$conn=mysqli_connect(\$this->host,\$this->username,\$this->passwd,\$this->dbName);if(mysqli_connect_errno()){throw new Exception('ERROR connecting database: '.mysqli_connect_error());die(55);}}catch(Exception \$e){print_r(\$e->getMessage());die(55);}return \$conn;}public function backupTables(\$tables='*'){try{if(\$tables=='*'){\$tables=array();\$result=mysqli_query(\$this->conn,'SHOW TABLES');while(\$row=mysqli_fetch_row(\$result)){\$tables[]=\$row[0];}}else{\$tables=is_array(\$tables)?\$tables:explode(',',str_replace(' ','',\$tables));}\$sql='CREATE DATABASE IF NOT EXISTS \`'.\$this->dbName.\"\`;\\n\\n\";\$sql.='USE \`'.\$this->dbName.\"\`;\\n\\n\";if(\$this->disableForeignKeyChecks===true){\$sql.=\"SET foreign_key_checks = 0;\\n\\n\";}foreach(\$tables as \$table){\$this->obfPrint(\"Backing up \`\".\$table.\"\` table...\".str_repeat('.',50-strlen(\$table)),0,0);\$sql.='DROP TABLE IF EXISTS \`'.\$table.'\`;';\$row=mysqli_fetch_row(mysqli_query(\$this->conn,'SHOW CREATE TABLE \`'.\$table.'\`'));\$sql.=\"\\n\\n\".\$row[1].\";\\n\\n\";\$row=mysqli_fetch_row(mysqli_query(\$this->conn,'SELECT COUNT(*) FROM \`'.\$table.'\`'));\$numRows=\$row[0];\$numBatches=intval(\$numRows/\$this->batchSize)+1;for(\$b=1;\$b<=\$numBatches;\$b++){\$query='SELECT * FROM \`'.\$table.'\` LIMIT '.(\$b*\$this->batchSize-\$this->batchSize).','.\$this->batchSize;\$result=mysqli_query(\$this->conn,\$query);\$realBatchSize=mysqli_num_rows(\$result);\$numFields=mysqli_num_fields(\$result);if(\$realBatchSize!==0){\$sql.='INSERT INTO \`'.\$table.'\` VALUES ';for(\$i=0;\$i<\$numFields;\$i++){\$rowCount=1;while(\$row=mysqli_fetch_row(\$result)){\$sql.='(';for(\$j=0;\$j<\$numFields;\$j++){if(isset(\$row[\$j])){\$row[\$j]=addslashes(\$row[\$j]);\$row[\$j]=str_replace(\"\\n\",\"\\\\n\",\$row[\$j]);\$row[\$j]=str_replace(\"\\r\",\"\\\\r\",\$row[\$j]);\$row[\$j]=str_replace(\"\\f\",\"\\\\f\",\$row[\$j]);\$row[\$j]=str_replace(\"\\t\",\"\\\\t\",\$row[\$j]);\$row[\$j]=str_replace(\"\\v\",\"\\\\v\",\$row[\$j]);\$row[\$j]=str_replace(\"\\a\",\"\\\\a\",\$row[\$j]);\$row[\$j]=str_replace(\"\\b\",\"\\\\b\",\$row[\$j]);if(\$row[\$j]=='true'or \$row[\$j]=='false'or preg_match('/^-?[0-9]+\$/',\$row[\$j])or \$row[\$j]=='NULL'or \$row[\$j]=='null'){\$sql.=\$row[\$j];}else{\$sql.='\"'.\$row[\$j].'\"';}}else{\$sql.='NULL';}if(\$j<(\$numFields-1)){\$sql.=',';}}if(\$rowCount==\$realBatchSize){\$rowCount=0;\$sql.=\");\\n\";}else{\$sql.=\"),\\n\";}\$rowCount++;}}\$this->saveFile(\$sql);\$sql='';}}\$sql.=\"\\n\\n\";\$this->obfPrint('OK');}if(\$this->disableForeignKeyChecks===true){\$sql.=\"SET foreign_key_checks = 1;\\n\";}\$this->saveFile(\$sql);if(defined('BACKUP_TRIGGERS')&&BACKUP_TRIGGERS===true){\$sql=\$this->backupTriggers();\$this->saveFile(\$sql);}if(\$this->gzipBackupFile){\$this->gzipBackupFile();}else{\$this->obfPrint('Backup file succesfully saved to '.\$this->backupDir.'/'.\$this->backupFile,1,1);}}catch(Exception \$e){print_r(\$e->getMessage());return false;}return true;}protected function backupTriggers(){\$sql=\"\\n\\n\";\$result=\$this->conn->query('SHOW TRIGGERS');while(\$row=\$result->fetch_assoc()){\$this->obfPrint(\"Backing up \".\$row['Trigger'].\" trigger...\".str_repeat('.',50-strlen(\$row['Trigger'])),0,0);\$sql.='DROP TRIGGER IF EXISTS '.\$row['Trigger'].';';\$sql.=\"\\n\\n\";\$sql.='CREATE TRIGGER '.\$row['Trigger'].' '.\$row['Timing'].' '.\$row['Event'].' ON \`'.\$row['Table'].'\` FOR EACH ROW'.\"\\n\\t\\t\".\$row['Statement'].';';\$sql.=\"\\n\\n\\n\";\$this->obfPrint(\"OK\");}\$result->close();return \$sql;}protected function saveFile(&\$sql){if(!\$sql)return false;try{if(!file_exists(\$this->backupDir)){mkdir(\$this->backupDir,0777,true);}file_put_contents(\$this->backupDir.'/'.\$this->backupFile,\$sql,FILE_APPEND|LOCK_EX);}catch(Exception \$e){print_r(\$e->getMessage());return false;}return true;}protected function gzipBackupFile(\$level=9){if(!\$this->gzipBackupFile){return true;}\$source=\$this->backupDir.'/'.\$this->backupFile;\$dest=\$source.'.gz';\$this->obfPrint('Gzipping backup file to '.\$dest.'... ',1,0);\$mode='wb'.\$level;if(\$fpOut=gzopen(\$dest,\$mode)){if(\$fpIn=fopen(\$source,'rb')){while(!feof(\$fpIn)){gzwrite(\$fpOut,fread(\$fpIn,1024*256));}fclose(\$fpIn);}else{return false;}gzclose(\$fpOut);if(!unlink(\$source)){return false;}}else{return false;}\$this->obfPrint('OK');return \$dest;}public function obfPrint(\$msg='',\$lineBreaksBefore=0,\$lineBreaksAfter=1){if(!\$msg){return false;}if(\$msg!='OK'and \$msg!='KO'){\$msg=date(\"Y-m-d H:i:s\").' - '.\$msg;}\$output='';if(php_sapi_name()!=\"cli\"){\$lineBreak=\"<br />\";}else{\$lineBreak=\"\\n\";}if(\$lineBreaksBefore>0){for(\$i=1;\$i<=\$lineBreaksBefore;\$i++){\$output.=\$lineBreak;}}\$output.=\$msg;if(\$lineBreaksAfter>0){for(\$i=1;\$i<=\$lineBreaksAfter;\$i++){\$output.=\$lineBreak;}}\$this->output.=str_replace('<br />','\\n',\$output);echo \$output;if(php_sapi_name()!=\"cli\"){if(ob_get_level()>0){ob_flush();}}\$this->output.=\" \";flush();}public function getOutput(){return \$this->output;}}error_reporting(E_ALL);set_time_limit(900);if(php_sapi_name()!=\"cli\"){echo '<div style=\"font-family: monospace;\">';}\$backupDatabase=new Backup_Database(DB_HOST,DB_USER,DB_PASSWORD,DB_NAME,CHARSET);\$result=\$backupDatabase->backupTables(TABLES,BACKUP_DIR)?'OK':'KO';\$backupDatabase->obfPrint('Backup result: '.\$result,1);if(\$result=='KO')exit(55);\$output=\$backupDatabase->getOutput();if(php_sapi_name()!=\"cli\"){echo '</div>';}" > /dev/null
+						mysqldump -h "$MYSQLHOST" -u "$MYSQLUSER" -p "$MYSQLPASSWORD" "${databases[$j]}" > "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/${databases[$j]}.sql"
 						j=$((j+1))
 						echo ""
 					done
@@ -552,7 +554,84 @@ case $METHOD in
 
 				;;
 			restore)
-				echo "Under development..."
+				if [[ ${#PARAMS[@]} != 3 ]]
+				then
+					echoerr "Incorrect number of parameters"
+					echoerr ""
+					show_help
+				fi
+
+				BACKUP_DIR2="${PARAMS[2]}"
+				if [[ $PARAM_DIR != true ]]
+				then
+					BACKUP_DIR2="$BACKUP_DIR/${PARAMS[0]}/${PARAMS[2]}/"
+				fi
+
+				if [[ ! -d "$BACKUP_DIR2" || ! -d "$BACKUP_DIR2/databases/" || ! -d "$BACKUP_DIR2/files/" ]]
+				then
+					echoerr "Error: Backup not found at '$BACKUP_DIR2'"
+					exit 1
+				fi
+
+				echo -n "Restoring files..."
+				cd "$ini_path/"
+				while IFS='' read -r -d '' filename
+				do
+					while read -r line
+					do
+						local line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+						if [[ "$line" != "" ]]
+						then
+							if [[ -d "`dirname "$filename"`/$line" ]]
+							then
+								rm -R "`dirname "$filename"`/$line"
+							elif [[ -f "`dirname "$filename"`/$line" ]]
+							then
+								rm "`dirname "$filename"`/$line"
+							fi
+
+							if [[ ! -f "$BACKUP_DIR2/files/`dirname "$filename"`/$line" && ! -d "$BACKUP_DIR2/files/`dirname "$filename"`/$line" ]]
+							then
+								continue
+							fi
+							if [[ ! -d "`dirname "$filename"`/`dirname "$line"`" ]]
+							then
+								mkdir -p "`dirname "$filename"`/`dirname "$line"`"
+							fi
+
+							if [[ -d "$BACKUP_DIR2/files/`dirname "$filename"`/$line" ]]
+							then
+								cp -R "$BACKUP_DIR2/files/`dirname "$filename"`/$line" "`dirname "$filename"`/`dirname "$line"`"
+							else
+								cp -R "$BACKUP_DIR2/files/`dirname "$filename"`/$line" "`dirname "$filename"`/$line"
+							fi
+						fi
+					done < "$filename"
+				done < <(find "./" -type f -name ".gitignore" -print0)
+				cd -
+				echo ""
+
+				php -r "include '$ini_path/$ini_mysql_configfile';\$m=new mysqli($ini_mysql_var_host,$ini_mysql_var_user,$ini_mysql_var_password);\$q=\$m->query('SHOW DATABASES');while(\$d=\$q->fetch_assoc())if(preg_match('/$ini_mysql_backup_dbptn/',\$d['Database']))\$m->query('DROP DATABASE \`'.\$d['Database'].'\`');"
+				set +e
+				exitcode="`compgen -G "$BACKUP_DIR2/databases/*.sql" > /dev/null ; echo "$?"`"
+				set -e
+				if [[ "$exitcode" == "0" ]]
+				then
+					MYSQLUSER="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_user;"`"
+					MYSQLPASSWORD="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_password;"`"
+					MYSQLHOST="`php -r "include '$ini_path/$ini_mysql_configfile';echo $ini_mysql_var_host;"`"					
+					databases=(`ls "$BACKUP_DIR2/databases/"*.sql`)
+					j=0
+					while [[ $j < ${#databases[@]} ]]
+					do
+						db_temp=`basename "${databases[$j]}"`
+						echo -n "Restoring \`${db_temp:0:${#db_temp}-4}\`..."
+						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" -p "$MYSQLPASSWORD" -e "CREATE DATABASE \`${db_temp:0:${#db_temp}-4}\`;"
+						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" -p "$MYSQLPASSWORD" < "$BACKUP_DIR2/databases/$db_temp"
+						echo ""
+						j=$((j+1))
+					done
+				fi
 
 				;;
 			*)
