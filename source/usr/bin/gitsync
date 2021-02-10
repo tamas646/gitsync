@@ -543,7 +543,7 @@ case $METHOD in
 					while [[ $j < ${#databases[@]} ]]
 					do
 						echo -n "Backing up \`${databases[$j]}\`..."
-						mysqldump -h "$MYSQLHOST" -u "$MYSQLUSER" -p "$MYSQLPASSWORD" "${databases[$j]}" > "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/${databases[$j]}.sql"
+						mysqldump -h "$MYSQLHOST" -u "$MYSQLUSER" --password="$MYSQLPASSWORD" "${databases[$j]}" > "/tmp/gitsync/${PARAMS[0]}-$PARAM_NAME/${databases[$j]}.sql"
 						j=$((j+1))
 						echo ""
 					done
@@ -579,7 +579,7 @@ case $METHOD in
 				do
 					while read -r line
 					do
-						local line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+						line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 						if [[ "$line" != "" ]]
 						then
 							if [[ -d "`dirname "$filename"`/$line" ]]
@@ -608,7 +608,6 @@ case $METHOD in
 						fi
 					done < "$filename"
 				done < <(find "./" -type f -name ".gitignore" -print0)
-				cd -
 				echo ""
 
 				php -r "include '$ini_path/$ini_mysql_configfile';\$m=new mysqli($ini_mysql_var_host,$ini_mysql_var_user,$ini_mysql_var_password);\$q=\$m->query('SHOW DATABASES');while(\$d=\$q->fetch_assoc())if(preg_match('/$ini_mysql_backup_dbptn/',\$d['Database']))\$m->query('DROP DATABASE \`'.\$d['Database'].'\`');"
@@ -626,8 +625,8 @@ case $METHOD in
 					do
 						db_temp=`basename "${databases[$j]}"`
 						echo -n "Restoring \`${db_temp:0:${#db_temp}-4}\`..."
-						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" -p "$MYSQLPASSWORD" -e "CREATE DATABASE \`${db_temp:0:${#db_temp}-4}\`;"
-						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" -p "$MYSQLPASSWORD" < "$BACKUP_DIR2/databases/$db_temp"
+						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" --password="$MYSQLPASSWORD" -e "CREATE DATABASE \`${db_temp:0:${#db_temp}-4}\`;"
+						mysql -h "$MYSQLHOST" -u "$MYSQLUSER" --password="$MYSQLPASSWORD" < "$BACKUP_DIR2/databases/$db_temp"
 						echo ""
 						j=$((j+1))
 					done
