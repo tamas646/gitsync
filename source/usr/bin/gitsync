@@ -732,7 +732,7 @@ case $METHOD in
 Gitsync Time runtime error!
 
 The 'gitsync time' command has run into an error on machine `/bin/hostname`.
-Command: ${PARAMS[0]}
+Command: `echo "${PARAMS[0]}" |tr ';' ' '`
 Exitcode: $exitcode
 Running time: `echo $((end-start))` sec
 Date: `date '+%Y-%m-%d %H:%M:%S'`
@@ -748,7 +748,7 @@ EOF
 Gitsync Time timeout!
 
 The 'gitsync time' command has detected a timeout on machine `/bin/hostname`.
-Command: ${PARAMS[0]}
+Command: `echo "${PARAMS[0]}" |tr ';' ' '`
 Running time: `echo $((end-start))` sec (allowed: $PARAM_TIME sec)
 Date: `date '+%Y-%m-%d %H:%M:%S'`
 EOF
